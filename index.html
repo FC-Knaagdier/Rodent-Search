@@ -15,34 +15,33 @@
     .desc { color: #444; }
     .score { float: right; color: #888; font-size: 0.9rem; }
     .no-results { color: #666; padding: 1rem 0; }
+
+    /* Search bar layout */
+    .search-row { display: flex; gap: 0.5rem; align-items: stretch; }
+    .search-input-wrap { flex: 1; }
+    #searchBtn {
+      background: #0070f3;
+      color: #fff;
+      border: 0;
+      padding: 0 0.75rem;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+    }
+    #searchBtn:active { transform: translateY(1px); }
+    #searchBtn[disabled] { opacity: 0.6; cursor: default; }
+
     @media (prefers-color-scheme: dark) {
       body { background: #0b0b0b; color: #ddd; }
       input#q { background: #111; border-color: #222; color: #ddd; }
       .result { border-bottom-color: #222; }
       .desc { color: #bbb; }
+      #searchBtn { background: #0a66d1; color: #fff; }
     }
-#searchBtn {
-  background: #0070f3;
-  color: #fff;
-  border: 0;
-  padding: 0 0.75rem;
-  border-radius: 6px;
-  font-size: 1rem;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-#searchBtn:active { transform: translateY(1px); }
-@media (prefers-color-scheme: dark) {
-  #searchBtn { background: #0a66d1; color: #fff; }
-}
-
-#searchBtn:active { transform: translateY(1px); }
-@media (prefers-color-scheme: dark) {
-  #searchBtn { background: #0a66d1; color: #fff; }
-}
-
   </style>
 </head>
 <body>
@@ -51,195 +50,151 @@
     <div class="meta">Zoekt op Titel &amp; Beschrijving — privacyvriendelijk, alles in je browser</div>
   </header>
 
-<main>
-  <div style="display:flex; gap:0.5rem; align-items:stretch;">
-    <input id="q" placeholder="Zoek op titel of beschrijving..." autocomplete="off" aria-label="Zoekterm" />
-    <button id="searchBtn" type="button" aria-label="Zoek" title="Zoek">🔍</button>
-  </div>
-  <div id="results" aria-live="polite"></div>
-</main>
+  <main>
+    <div class="search-row" role="search" aria-label="Zoek">
+      <div class="search-input-wrap">
+        <input id="q" placeholder="Zoek op titel of beschrijving..." autocomplete="off" aria-label="Zoekterm" />
+      </div>
+      <button id="searchBtn" type="button" aria-label="Zoek" title="Zoek" disabled>🔍</button>
+    </div>
 
-
+    <div id="results" aria-live="polite"></div>
+  </main>
 
   <script>
-  // Minimal client-side search (geen externe libs)
-  // Verwacht: public/index.json en public/docs.json bestaan en zijn gemaakt door het build-script.
-// Verwacht: /content.json bestaat in root en bevat:
-// [{ id, title, description, url, ... }, ...]
+  // Verwacht: /content.json in root met object { "pages": [ { title, description, url }, ... ] }
 
-function normalizeText(s) {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u00C0-\u017F\s]/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-function tokenize(s) {
-  return normalizeText(s).split(' ').filter(Boolean);
-}
-function escapeHtml(s) {
-  return String(s || '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  }[c]));
-}
+  // ---- Normalisatie en tokenization ----
+  function normalizeText(s) {
+    return String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\u00C0-\u017F\s]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  function tokenize(s) {
+    return normalizeText(s).split(' ').filter(Boolean);
+  }
 
-function buildIndex(docs) {
-  const index = Object.create(null);
-  for (const doc of docs) {
-    const id = String(doc.id);
-    const title = doc.title || '';
-    const desc = doc.description || '';
-    // title duplicated for a simple title-boost
-    const text = title + ' ' + title + ' ' + desc;
-    const terms = tokenize(text);
-    const freqs = Object.create(null);
-    for (const t of terms) freqs[t] = (freqs[t] || 0) + 1;
-    for (const [t, f] of Object.entries(freqs)) {
-      if (!index[t]) index[t] = { df: 0, postings: [] };
-      index[t].postings.push([id, f]);
+  // ---- HTML-escape om XSS te voorkomen ----
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[c]));
+  }
+
+  // ---- Bouw inverted index in de browser ----
+  // docs: array of { id, title, description, url }
+  function buildIndex(docs) {
+    // index: term -> { df, postings: [[docId, freq], ...] }
+    const index = Object.create(null);
+    for (const doc of docs) {
+      const id = String(doc.id);
+      const title = doc.title || '';
+      const desc = doc.description || '';
+      // eenvoudige title-boost: dupliceer title tokens
+      const text = title + ' ' + title + ' ' + desc;
+      const terms = tokenize(text);
+      const freqs = Object.create(null);
+      for (const t of terms) freqs[t] = (freqs[t] || 0) + 1;
+      for (const [t, f] of Object.entries(freqs)) {
+        if (!index[t]) index[t] = { df: 0, postings: [] };
+        index[t].postings.push([id, f]);
+      }
     }
-  }
-  for (const t of Object.keys(index)) index[t].df = index[t].postings.length;
-  return index;
-}
-
-async function initSearch() {
-  const resEl = document.getElementById('results');
-  // Let op: fetch('/content.json') omdat file in root staat
-  const resp = await fetch('/content.json');
-  if (!resp.ok) {
-    resEl.innerText = 'Kon /content.json niet laden. Controleer dat het bestand in de root staat.';
-    return;
-  }
-  const docs = await resp.json();
-  const docsById = Object.fromEntries(docs.map(d => [String(d.id), d]));
-  const N = docs.length;
-
-  const index = buildIndex(docs);
-  const idfCache = {};
-  for (const term in index) {
-    const df = index[term].df || 0;
-    idfCache[term] = Math.log(1 + N / (1 + df));
+    for (const t of Object.keys(index)) index[t].df = index[t].postings.length;
+    return index;
   }
 
-  const qEl = document.getElementById('q');
-  const btnEl = document.getElementById('searchBtn');
-
-  let timer = null;
-  function debouncedSearch() {
-    clearTimeout(timer);
-    timer = setTimeout(() => performSearch(qEl.value.trim(), index, idfCache, docsById, resEl), 150);
-  }
-  function triggerSearch() {
-    clearTimeout(timer);
-    performSearch(qEl.value.trim(), index, idfCache, docsById, resEl);
-  }
-
-  qEl.addEventListener('input', debouncedSearch);
-  qEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      triggerSearch();
-    }
-  });
-  btnEl.addEventListener('click', triggerSearch);
-  // Optioneel: focus op input bij load
-  qEl.focus();
-}
-
-function performSearch(query, index, idfCache, docsById, resEl) {
-  if (!query) {
-    resEl.innerHTML = '';
-    return;
-  }
-  const terms = tokenize(query);
-  if (terms.length === 0) {
-    resEl.innerHTML = '';
-    return;
-  }
-
-  const scores = Object.create(null);
-  for (const t of terms) {
-    const entry = index[t];
-    if (!entry) continue;
-    const idf = idfCache[t] || 1;
-    for (const [docId, freq] of entry.postings) {
-      scores[docId] = (scores[docId] || 0) + freq * idf;
-    }
-  }
-
-  const hits = Object.entries(scores)
-    .map(([docId, score]) => ({ doc: docsById[docId], score }))
-    .filter(h => h.doc)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 50);
-
-  if (!hits.length) {
-    resEl.innerHTML = '<div class="no-results">Geen resultaten</div>';
-    return;
-  }
-
-  resEl.innerHTML = hits.map(h => {
-    const d = h.doc;
-    return [
-      '<article class="result" role="article" aria-label="' + escapeHtml(d.title || d.url) + '">',
-        '<div class="title"><a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(d.title || d.url) + '</a></div>',
-        '<div class="desc">' + escapeHtml(d.description || '') + '</div>',
-        '<div class="score">' + (Math.round(h.score * 100) / 100) + '</div>',
-      '</article>'
-    ].join('');
-  }).join('');
-}
-
-initSearch().catch(err => {
-  console.error(err);
-  const resEl = document.getElementById('results');
-  if (resEl) resEl.innerText = 'Fout bij initialisatie: ' + err;
-});
-
-
+  // ---- Init ----
   async function initSearch() {
-    // Laad statische index en docs (zorg dat deze bestanden publiekelijk beschikbaar zijn)
-    const [idxResp, docsResp] = await Promise.all([fetch('/index.json'), fetch('/docs.json')]);
-    if (!idxResp.ok || !docsResp.ok) {
-      document.getElementById('results').innerText = 'Kon indexbestanden niet laden. Controleer dat /index.json en /docs.json bestaan.';
+    const qEl = document.getElementById('q');
+    const btnEl = document.getElementById('searchBtn');
+    const resEl = document.getElementById('results');
+
+    let resp;
+    try {
+      resp = await fetch('/content.json', { cache: 'no-cache' });
+    } catch (err) {
+      resEl.innerText = 'Kon /content.json niet laden. Controleer dat het bestand in de root staat.';
+      console.error(err);
       return;
     }
-    const index = await idxResp.json(); // { term: { df, postings: [[docId, freq], ...] }, ... }
-    const docs = await docsResp.json();  // [{ id, title, description, url }, ...]
-    const docsById = Object.fromEntries(docs.map(d => [d.id, d]));
+    if (!resp.ok) {
+      resEl.innerText = 'Kon /content.json niet laden (HTTP ' + resp.status + ').';
+      return;
+    }
 
+    let data;
+    try {
+      data = await resp.json();
+    } catch (err) {
+      resEl.innerText = 'Fout bij parsen van /content.json.';
+      console.error(err);
+      return;
+    }
+
+    const pages = Array.isArray(data.pages) ? data.pages : [];
+    if (!pages.length) {
+      resEl.innerText = 'Geen documenten gevonden in /content.json (verwacht "pages" array).';
+      return;
+    }
+
+    // map pages -> docs with generated id if missing
+    const docs = pages.map((p, i) => {
+      return {
+        id: p.id !== undefined ? String(p.id) : String(i + 1),
+        title: p.title || '',
+        description: p.description || '',
+        url: p.url || ''
+      };
+    });
+
+    const docsById = Object.fromEntries(docs.map(d => [String(d.id), d]));
     const N = docs.length;
+
+    // Build index (kan traag zijn bij zeer grote datasets)
+    const index = buildIndex(docs);
+
+    // Precompute IDF
     const idfCache = {};
     for (const term in index) {
-      const df = index[term].df || (index[term].postings && index[term].postings.length) || 0;
-      // eenvoudige IDF: log(1 + N/(1+df))
+      const df = index[term].df || 0;
       idfCache[term] = Math.log(1 + N / (1 + df));
     }
 
-    const qEl = document.getElementById('q');
-    const resEl = document.getElementById('results');
+    // Enable search button
+    btnEl.disabled = false;
 
-    // Debounce input voor responsiviteit
+    // Debounce helper
     let timer = null;
-    qEl.addEventListener('input', () => {
+    function debouncedSearch() {
       clearTimeout(timer);
       timer = setTimeout(() => performSearch(qEl.value.trim(), index, idfCache, docsById, resEl), 150);
-    });
+    }
+    function triggerSearch() {
+      clearTimeout(timer);
+      performSearch(qEl.value.trim(), index, idfCache, docsById, resEl);
+    }
 
-    // Optional: handle Enter for accessibility (execute immediately)
+    // Events
+    qEl.addEventListener('input', debouncedSearch);
     qEl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
-        clearTimeout(timer);
-        performSearch(qEl.value.trim(), index, idfCache, docsById, resEl);
+        e.preventDefault();
+        triggerSearch();
       }
     });
+    btnEl.addEventListener('click', triggerSearch);
+
+    qEl.focus();
   }
 
+  // ---- Zoekfunctie ----
   function performSearch(query, index, idfCache, docsById, resEl) {
     if (!query) {
       resEl.innerHTML = '';
@@ -251,7 +206,7 @@ initSearch().catch(err => {
       return;
     }
 
-    // Accumulate scores: term freq * idf. Title boost is already reflected in frequencies used when building index.
+    // Accumulate scores: freq * idf
     const scores = Object.create(null); // docId -> score
     for (const t of terms) {
       const entry = index[t];
@@ -265,7 +220,7 @@ initSearch().catch(err => {
 
     const hits = Object.entries(scores)
       .map(([docId, score]) => ({ doc: docsById[docId], score }))
-      .filter(h => h.doc) // safety
+      .filter(h => h.doc)
       .sort((a, b) => b.score - a.score)
       .slice(0, 50);
 
@@ -289,7 +244,8 @@ initSearch().catch(err => {
   // Start
   initSearch().catch(err => {
     console.error(err);
-    document.getElementById('results').innerText = 'Fout bij initialisatie: ' + err;
+    const resEl = document.getElementById('results');
+    if (resEl) resEl.innerText = 'Fout bij initialisatie: ' + err;
   });
   </script>
 </body>
