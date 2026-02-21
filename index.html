@@ -21,6 +21,28 @@
       .result { border-bottom-color: #222; }
       .desc { color: #bbb; }
     }
+#searchBtn {
+  background: #0070f3;
+  color: #fff;
+  border: 0;
+  padding: 0 0.75rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#searchBtn:active { transform: translateY(1px); }
+@media (prefers-color-scheme: dark) {
+  #searchBtn { background: #0a66d1; color: #fff; }
+}
+
+#searchBtn:active { transform: translateY(1px); }
+@media (prefers-color-scheme: dark) {
+  #searchBtn { background: #0a66d1; color: #fff; }
+}
+
   </style>
 </head>
 <body>
@@ -29,37 +51,156 @@
     <div class="meta">Zoekt op Titel &amp; Beschrijving — privacyvriendelijk, alles in je browser</div>
   </header>
 
-  <main>
-    <input id="q" placeholder="Zoek op titel of beschrijving..." autocomplete="off" />
-    <div id="results" aria-live="polite"></div>
-  </main>
+<main>
+  <div style="display:flex; gap:0.5rem; align-items:stretch;">
+    <input id="q" placeholder="Zoek op titel of beschrijving..." autocomplete="off" aria-label="Zoekterm" />
+    <button id="searchBtn" type="button" aria-label="Zoek" title="Zoek">🔍</button>
+  </div>
+  <div id="results" aria-live="polite"></div>
+</main>
+
+
 
   <script>
   // Minimal client-side search (geen externe libs)
   // Verwacht: public/index.json en public/docs.json bestaan en zijn gemaakt door het build-script.
+// Verwacht: /content.json bestaat in root en bevat:
+// [{ id, title, description, url, ... }, ...]
 
-  // Normalisatie en tokenization
-  function normalizeText(s) {
-    return String(s || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9\u00C0-\u017F\s]/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+function normalizeText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u00C0-\u017F\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function tokenize(s) {
+  return normalizeText(s).split(' ').filter(Boolean);
+}
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[c]));
+}
+
+function buildIndex(docs) {
+  const index = Object.create(null);
+  for (const doc of docs) {
+    const id = String(doc.id);
+    const title = doc.title || '';
+    const desc = doc.description || '';
+    // title duplicated for a simple title-boost
+    const text = title + ' ' + title + ' ' + desc;
+    const terms = tokenize(text);
+    const freqs = Object.create(null);
+    for (const t of terms) freqs[t] = (freqs[t] || 0) + 1;
+    for (const [t, f] of Object.entries(freqs)) {
+      if (!index[t]) index[t] = { df: 0, postings: [] };
+      index[t].postings.push([id, f]);
+    }
   }
-  function tokenize(s) {
-    return normalizeText(s).split(' ').filter(Boolean);
+  for (const t of Object.keys(index)) index[t].df = index[t].postings.length;
+  return index;
+}
+
+async function initSearch() {
+  const resEl = document.getElementById('results');
+  // Let op: fetch('/content.json') omdat file in root staat
+  const resp = await fetch('/content.json');
+  if (!resp.ok) {
+    resEl.innerText = 'Kon /content.json niet laden. Controleer dat het bestand in de root staat.';
+    return;
+  }
+  const docs = await resp.json();
+  const docsById = Object.fromEntries(docs.map(d => [String(d.id), d]));
+  const N = docs.length;
+
+  const index = buildIndex(docs);
+  const idfCache = {};
+  for (const term in index) {
+    const df = index[term].df || 0;
+    idfCache[term] = Math.log(1 + N / (1 + df));
   }
 
-  // HTML-escape om XSS te voorkomen
-  function escapeHtml(s) {
-    return String(s || '').replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-    }[c]));
+  const qEl = document.getElementById('q');
+  const btnEl = document.getElementById('searchBtn');
+
+  let timer = null;
+  function debouncedSearch() {
+    clearTimeout(timer);
+    timer = setTimeout(() => performSearch(qEl.value.trim(), index, idfCache, docsById, resEl), 150);
   }
+  function triggerSearch() {
+    clearTimeout(timer);
+    performSearch(qEl.value.trim(), index, idfCache, docsById, resEl);
+  }
+
+  qEl.addEventListener('input', debouncedSearch);
+  qEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      triggerSearch();
+    }
+  });
+  btnEl.addEventListener('click', triggerSearch);
+  // Optioneel: focus op input bij load
+  qEl.focus();
+}
+
+function performSearch(query, index, idfCache, docsById, resEl) {
+  if (!query) {
+    resEl.innerHTML = '';
+    return;
+  }
+  const terms = tokenize(query);
+  if (terms.length === 0) {
+    resEl.innerHTML = '';
+    return;
+  }
+
+  const scores = Object.create(null);
+  for (const t of terms) {
+    const entry = index[t];
+    if (!entry) continue;
+    const idf = idfCache[t] || 1;
+    for (const [docId, freq] of entry.postings) {
+      scores[docId] = (scores[docId] || 0) + freq * idf;
+    }
+  }
+
+  const hits = Object.entries(scores)
+    .map(([docId, score]) => ({ doc: docsById[docId], score }))
+    .filter(h => h.doc)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 50);
+
+  if (!hits.length) {
+    resEl.innerHTML = '<div class="no-results">Geen resultaten</div>';
+    return;
+  }
+
+  resEl.innerHTML = hits.map(h => {
+    const d = h.doc;
+    return [
+      '<article class="result" role="article" aria-label="' + escapeHtml(d.title || d.url) + '">',
+        '<div class="title"><a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(d.title || d.url) + '</a></div>',
+        '<div class="desc">' + escapeHtml(d.description || '') + '</div>',
+        '<div class="score">' + (Math.round(h.score * 100) / 100) + '</div>',
+      '</article>'
+    ].join('');
+  }).join('');
+}
+
+initSearch().catch(err => {
+  console.error(err);
+  const resEl = document.getElementById('results');
+  if (resEl) resEl.innerText = 'Fout bij initialisatie: ' + err;
+});
+
 
   async function initSearch() {
     // Laad statische index en docs (zorg dat deze bestanden publiekelijk beschikbaar zijn)
