@@ -1,0 +1,19 @@
+{
+  "pages": [
+    {
+      "title": "Tweakers",
+      "description": "Tech nieuws voor hardware and software nerds",
+      "url": "https://tweakers.net"
+    },
+    {
+      "title": "Bright.nl",
+      "description": "Tech nieuws voor hardware and software nerds",
+      "url": "https:/bright.nl"
+    },
+    {
+      "title": "Ricardos mindsettips",
+      "description": "Blog over onafhankelijkheid en bevat veel levenslessen ",
+      "url": "https://ricardosmindsettips.nl"
+    }
+  ]
+}
