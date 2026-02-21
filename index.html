@@ -157,13 +157,68 @@
 
     btnEl.disabled = false;
 
-    // NB: geen debounced input listener en geen Enter handler.
-    // Alleen de knop triggert zoeken:
+    // Helper: update URL query param without reload
+    function updateUrlQuery(q) {
+      try {
+        const url = new URL(window.location.href);
+        if (q) url.searchParams.set('q', q);
+        else url.searchParams.delete('q');
+        history.replaceState(null, '', url.toString());
+      } catch (e) {
+        // Fallback: do nothing if URL constructor not available
+        console.warn('Kon URL niet updaten', e);
+      }
+    }
+
+    // Debounce helper (kleine debounce om te voorkomen dat we URL te vaak updaten)
+    function debounce(fn, wait) {
+      let t;
+      return (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), wait);
+      };
+    }
+
+    const debouncedUpdateUrl = debounce((q) => updateUrlQuery(q), 150);
+
+    // Zoek-actie wrapper die ook URL bijwerkt
+    function doSearchAndUpdateUrl(query) {
+      performSearch(query, index, idfCache, docsById, resEl);
+      debouncedUpdateUrl(query);
+    }
+
+    // Klik op knop
     btnEl.addEventListener('click', () => {
-      performSearch(qEl.value.trim(), index, idfCache, docsById, resEl);
+      doSearchAndUpdateUrl(qEl.value.trim());
     });
 
-    // Optioneel: maak ook klikken op input niet triggeren (standaard)
+    // Enter in input triggert zoeken
+    qEl.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        doSearchAndUpdateUrl(qEl.value.trim());
+      }
+    });
+
+    // Optioneel: live update van URL tijdens typen (comment/uncomment as you like)
+    qEl.addEventListener('input', () => {
+      // alleen URL bijwerken, niet iedere input zoeken:
+      debouncedUpdateUrl(qEl.value.trim());
+    });
+
+    // Bij initialisatie: als URL ?q=... heeft, voer zoekopdracht uit en vul input
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qParam = params.get('q');
+      if (qParam) {
+        qEl.value = qParam;
+        // direct uitvoeren
+        performSearch(qParam, index, idfCache, docsById, resEl);
+      }
+    } catch (e) {
+      console.warn('Kon URL parameters niet lezen', e);
+    }
+
     qEl.focus();
   }
 
