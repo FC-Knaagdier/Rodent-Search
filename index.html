@@ -111,7 +111,7 @@
 
     let resp;
     try {
-      resp = await fetch('/content.json', { cache: 'no-cache' });
+      resp = await fetch('content.json', { cache: 'no-cache' });
     } catch (err) {
       resEl.innerText = 'Kon /content.json niet laden. Controleer dat het bestand in de root staat.';
       console.error(err);
